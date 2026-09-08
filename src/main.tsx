@@ -28,7 +28,10 @@ import {
 import "./style.css";
 import MemeEditor, { type MemeSettings, defaultMeme } from "./MemeEditor";
 import AppHeader, { type EditorMode } from "./AppHeader";
-import CarouselEditor, { type CarouselSettings, defaultCarousel } from "./CarouselEditor";
+import CarouselEditor, {
+  type CarouselSettings,
+  defaultCarousel,
+} from "./CarouselEditor";
 import {
   captionSlides,
   colorPresets,
@@ -210,7 +213,9 @@ function App() {
   };
   useEffect(() => {
     if (browserOnly) {
-      setNotice("Online demo: projects stay in this browser. Video rendering requires the desktop edition.");
+      setNotice(
+        "Online demo: projects stay in this browser. Memes can export as WebM; MP4 rendering requires the desktop edition.",
+      );
       return;
     }
     fetch("/api/assets")
@@ -222,16 +227,18 @@ function App() {
   }, []);
   const refreshSavedProjects = () =>
     browserOnly
-      ? setSavedProjects(listBrowserProjects().map((item) => ({
-          filename: item.filename,
-          name: item.name,
-          updatedAt: item.updatedAt,
-          size: item.size,
-        })))
+      ? setSavedProjects(
+          listBrowserProjects().map((item) => ({
+            filename: item.filename,
+            name: item.name,
+            updatedAt: item.updatedAt,
+            size: item.size,
+          })),
+        )
       : fetch("/api/projects")
-      .then((r) => r.json())
-      .then((items) => setSavedProjects(Array.isArray(items) ? items : []))
-      .catch(() => {});
+          .then((r) => r.json())
+          .then((items) => setSavedProjects(Array.isArray(items) ? items : []))
+          .catch(() => {});
   useEffect(() => {
     refreshSavedProjects();
   }, []);
@@ -299,14 +306,23 @@ function App() {
             media.src = url;
             await new Promise<void>((resolve, reject) => {
               media.onloadedmetadata = () => resolve();
-              media.onerror = () => reject(Error(`Could not read ${file.name}`));
+              media.onerror = () =>
+                reject(Error(`Could not read ${file.name}`));
             });
             a.duration = Number.isFinite(media.duration) ? media.duration : 0;
+            if (kind === "video") {
+              const video = media as HTMLVideoElement;
+              a.width = video.videoWidth;
+              a.height = video.videoHeight;
+              a.thumbnail = url;
+            }
           }
           imported.push(a);
           setAssets((old) => [...old, a]);
         }
-        setNotice("Media stays in this tab only. Project settings and templates are saved in this browser.");
+        setNotice(
+          "Media stays in this tab only. Project settings and templates are saved in this browser.",
+        );
         return imported;
       }
       for (const file of Array.from(files)) {
@@ -406,13 +422,19 @@ function App() {
         q.version !== 1 ||
         !Array.isArray(q.shots) ||
         !q.style ||
-        !(q.mode === "carousel" ? q.carousel?.slides?.length : ["9:16", "1:1", "16:9"].includes(q.format))
+        !(q.mode === "carousel"
+          ? q.carousel?.slides?.length
+          : ["9:16", "1:1", "16:9"].includes(q.format))
       )
         throw Error("Not a Reel Maker project");
       setP(q);
       setSelected(0);
       setPlaying(false);
-      setNotice(browserOnly ? `Opened ${filename} from this browser` : `Opened saved/${filename}`);
+      setNotice(
+        browserOnly
+          ? `Opened ${filename} from this browser`
+          : `Opened saved/${filename}`,
+      );
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -576,7 +598,11 @@ function App() {
         savedProjects={savedProjects}
         onChange={update}
         onImport={importFiles}
-        onOpen={(q) => { setP(q); setSelected(0); setPlaying(false); }}
+        onOpen={(q) => {
+          setP(q);
+          setSelected(0);
+          setPlaying(false);
+        }}
         onOpenSaved={openSavedProject}
         onSave={saveProject}
       />
@@ -605,7 +631,9 @@ function App() {
               q.version !== 1 ||
               !Array.isArray(q.shots) ||
               !q.style ||
-              !(q.mode === "carousel" ? q.carousel?.slides?.length : ["9:16", "1:1", "16:9"].includes(q.format))
+              !(q.mode === "carousel"
+                ? q.carousel?.slides?.length
+                : ["9:16", "1:1", "16:9"].includes(q.format))
             )
               throw Error("Not a Reel Maker project");
             setP(q);
@@ -618,10 +646,24 @@ function App() {
           e.target.value = "";
         }}
       />
-      <AppHeader name={p.name} mode="reel" onName={(name) => update({name})}
-        onMode={(mode) => { setPlaying(false); update({ mode, meme: p.meme || {...defaultMeme}, carousel: p.carousel || {...defaultCarousel} }); }}
-        onOpen={() => setModal("projects")} onSave={() => saveProject()}
-        onExport={() => setModal("export")} exportLabel={browserOnly ? "Desktop export" : "Export reel"} exportDisabled={browserOnly} />
+      <AppHeader
+        name={p.name}
+        mode="reel"
+        onName={(name) => update({ name })}
+        onMode={(mode) => {
+          setPlaying(false);
+          update({
+            mode,
+            meme: p.meme || { ...defaultMeme },
+            carousel: p.carousel || { ...defaultCarousel },
+          });
+        }}
+        onOpen={() => setModal("projects")}
+        onSave={() => saveProject()}
+        onExport={() => setModal("export")}
+        exportLabel={browserOnly ? "Desktop export" : "Export reel"}
+        exportDisabled={browserOnly}
+      />
       <main>
         <aside className="library">
           <div className="section-title">
@@ -1492,16 +1534,29 @@ function App() {
               <>
                 <span className="eyebrow">PROJECTS</span>
                 <h1>Open project</h1>
-                <button className="secondary wide" onClick={() => projectInput.current?.click()}>
+                <button
+                  className="secondary wide"
+                  onClick={() => projectInput.current?.click()}
+                >
                   Choose project file
                 </button>
                 <div className="project-list">
                   {savedProjects.map((item) => (
-                    <button className="project-row" key={item.filename} onClick={() => { openSavedProject(item.filename); setModal(""); }}>
-                      <strong>{item.name}</strong><span>{new Date(item.updatedAt).toLocaleString()}</span>
+                    <button
+                      className="project-row"
+                      key={item.filename}
+                      onClick={() => {
+                        openSavedProject(item.filename);
+                        setModal("");
+                      }}
+                    >
+                      <strong>{item.name}</strong>
+                      <span>{new Date(item.updatedAt).toLocaleString()}</span>
                     </button>
                   ))}
-                  {!savedProjects.length && <p className="muted">No saved projects yet</p>}
+                  {!savedProjects.length && (
+                    <p className="muted">No saved projects yet</p>
+                  )}
                 </div>
               </>
             ) : modal === "match" ? (

@@ -27,7 +27,8 @@ The repository includes `wrangler.jsonc` for a Cloudflare Worker Static Assets d
 
 - Carousel creation, templates, SVG/PNG export, and project settings work in the browser.
 - Browser-saved projects and templates stay on that device and browser profile.
-- Reel and Meme media processing and MP4 export require the desktop edition because those workflows use native FFmpeg.
+- Original-clip memes can be clipped with the rectangle mask and exported as WebM entirely in the browser.
+- Background removal and native MP4 export require the desktop edition because those workflows use FFmpeg.
 - Visitors can open or fork the MIT-licensed source from the editor header.
 
 In Cloudflare Workers Builds, connect this GitHub repository and use:

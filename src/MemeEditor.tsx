@@ -16,7 +16,11 @@ import {
 } from "lucide-react";
 import AppHeader from "./AppHeader";
 import { FontPicker, TextSizeColor } from "./TextStyleControls";
-import { browserOnly, listBrowserTemplates, saveBrowserTemplate } from "./browserStorage";
+import {
+  browserOnly,
+  listBrowserTemplates,
+  saveBrowserTemplate,
+} from "./browserStorage";
 export type MemeSettings = MemeOptions & {
   backgroundId: string;
   overlayId: string;
@@ -150,8 +154,13 @@ export default function MemeEditor({
   const refreshTemplates = () =>
     browserOnly
       ? setTemplates(listBrowserTemplates("meme"))
-      : fetch("/api/meme/templates").then((r) => r.json()).then((x) => setTemplates(x.items || [])).catch(() => {});
-  useEffect(() => { refreshTemplates(); }, []);
+      : fetch("/api/meme/templates")
+          .then((r) => r.json())
+          .then((x) => setTemplates(x.items || []))
+          .catch(() => {});
+  useEffect(() => {
+    refreshTemplates();
+  }, []);
   async function saveTemplate() {
     const name = templateName.trim() || p.name || "Meme template";
     if (browserOnly) {
@@ -160,8 +169,15 @@ export default function MemeEditor({
       refreshTemplates();
       return;
     }
-    const r = await fetch("/api/meme/templates", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ name, format:p.format, meme:m }) });
-    if (r.ok) { setTemplateName(""); refreshTemplates(); }
+    const r = await fetch("/api/meme/templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, format: p.format, meme: m }),
+    });
+    if (r.ok) {
+      setTemplateName("");
+      refreshTemplates();
+    }
   }
   function update(v: Partial<MemeSettings>) {
     onChange({ meme: { ...m, ...v } });
@@ -198,7 +214,7 @@ export default function MemeEditor({
     link.remove();
   }
   useEffect(() => {
-    if (!working) return;
+    if (!working || browserOnly) return;
     let active = true;
     const timer = setInterval(async () => {
       try {
@@ -299,6 +315,12 @@ export default function MemeEditor({
   async function requestCutout() {
     setError("");
     setPlaying(false);
+    if (browserOnly) {
+      setError(
+        "Background removal requires the desktop edition. Choose Original clip to use the rectangle mask and export WebM in your browser.",
+      );
+      return;
+    }
     if (!exportTrimReady) {
       setError(
         `Trim the clip to between 0.2 and ${MEME_MAX_TRIM_SECONDS} seconds before removing the background.`,
@@ -403,6 +425,10 @@ export default function MemeEditor({
   async function render() {
     setError("");
     setPlaying(false);
+    if (browserOnly) {
+      await renderInBrowser();
+      return;
+    }
     try {
       const r = await fetch("/api/meme/render", {
         method: "POST",
@@ -426,6 +452,202 @@ export default function MemeEditor({
       setError((e as Error).message);
     }
   }
+  async function renderInBrowser() {
+    if (!bg || !source || m.overlayMode !== "original" || !ready) {
+      setError(
+        "Choose a background and an original video clip before exporting.",
+      );
+      return;
+    }
+    if (!("MediaRecorder" in window)) {
+      setError(
+        "This browser does not support video recording. Try current Chrome or Edge.",
+      );
+      return;
+    }
+    const output = document.createElement("canvas");
+    output.width = dimensions[0];
+    output.height = dimensions[1];
+    const ctx = output.getContext("2d");
+    if (!ctx) {
+      setError("Could not initialize the browser renderer.");
+      return;
+    }
+    const loadImage = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () =>
+          reject(Error("Could not load an image for export."));
+        image.src = src;
+      });
+    const waitForVideo = (video: HTMLVideoElement) =>
+      new Promise<void>((resolve, reject) => {
+        if (video.readyState >= 2) return resolve();
+        video.onloadeddata = () => resolve();
+        video.onerror = () =>
+          reject(Error("Could not load the video for export."));
+      });
+    const drawCover = (
+      media: CanvasImageSource,
+      sourceWidth: number,
+      sourceHeight: number,
+    ) => {
+      const scale = Math.max(
+        output.width / sourceWidth,
+        output.height / sourceHeight,
+      );
+      const width = sourceWidth * scale;
+      const height = sourceHeight * scale;
+      ctx.drawImage(
+        media,
+        (output.width - width) / 2,
+        (output.height - height) / 2,
+        width,
+        height,
+      );
+    };
+    let audioContext: AudioContext | null = null;
+    let soundtrackElement: HTMLAudioElement | null = null;
+    try {
+      const [background, povLayer, freeLayer] = await Promise.all([
+        loadImage(bg.url),
+        m.text ? loadImage(pov) : Promise.resolve(null),
+        m.freeText ? loadImage(extraImage) : Promise.resolve(null),
+      ]);
+      const clip = document.createElement("video");
+      clip.src = source.url;
+      clip.preload = "auto";
+      clip.playsInline = true;
+      await waitForVideo(clip);
+      clip.currentTime = m.in;
+
+      const canvasStream = output.captureStream(30);
+      const tracks = [...canvasStream.getVideoTracks()];
+      const AudioContextClass = window.AudioContext;
+      if (AudioContextClass && (m.keepAudio || sound)) {
+        audioContext = new AudioContextClass();
+        const destination = audioContext.createMediaStreamDestination();
+        if (m.keepAudio) {
+          const clipSource = audioContext.createMediaElementSource(clip);
+          const gain = audioContext.createGain();
+          gain.gain.value = m.sourceVolume;
+          clipSource.connect(gain).connect(destination);
+        }
+        if (sound) {
+          soundtrackElement = new Audio(sound.url);
+          soundtrackElement.loop = true;
+          const musicSource =
+            audioContext.createMediaElementSource(soundtrackElement);
+          const gain = audioContext.createGain();
+          gain.gain.value = m.soundtrackVolume;
+          musicSource.connect(gain).connect(destination);
+        }
+        tracks.push(...destination.stream.getAudioTracks());
+        await audioContext.resume();
+      }
+      const stream = new MediaStream(tracks);
+      const mimeType =
+        [
+          "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
+          "video/webm",
+        ].find((type) => MediaRecorder.isTypeSupported(type)) || "";
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType, videoBitsPerSecond: 8_000_000 } : undefined,
+      );
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      const stopped = new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+      });
+      setJob({
+        status: "rendering",
+        progress: 0,
+        message: "Rendering in this browser",
+      });
+      recorder.start(250);
+      await Promise.all([
+        clip.play(),
+        soundtrackElement?.play() || Promise.resolve(),
+      ]);
+      const started = performance.now();
+      let lastProgress = 0;
+      await new Promise<void>((resolve) => {
+        const draw = () => {
+          const elapsedSeconds = Math.min(
+            duration,
+            (performance.now() - started) / 1000,
+          );
+          ctx.clearRect(0, 0, output.width, output.height);
+          drawCover(
+            background,
+            background.naturalWidth,
+            background.naturalHeight,
+          );
+          const videoWidth = (output.width * m.size) / 100;
+          const videoHeight = videoWidth * (clip.videoHeight / clip.videoWidth);
+          const left = (output.width * m.x) / 100 - videoWidth / 2;
+          const top = (output.height * m.y) / 100 - videoHeight / 2;
+          ctx.save();
+          if (m.layout === "v2") {
+            ctx.beginPath();
+            ctx.rect(box.x, box.y, box.width, box.height);
+            ctx.clip();
+          }
+          ctx.drawImage(clip, left, top, videoWidth, videoHeight);
+          ctx.restore();
+          if (povLayer)
+            ctx.drawImage(povLayer, 0, 0, output.width, output.height);
+          if (freeLayer)
+            ctx.drawImage(freeLayer, 0, 0, output.width, output.height);
+          const progress = Math.round((elapsedSeconds / duration) * 100);
+          if (progress >= lastProgress + 5) {
+            lastProgress = progress;
+            setJob({
+              status: "rendering",
+              progress,
+              message: "Rendering in this browser",
+            });
+          }
+          if (elapsedSeconds >= duration || clip.ended) resolve();
+          else requestAnimationFrame(draw);
+        };
+        draw();
+      });
+      recorder.stop();
+      await stopped;
+      const blob = new Blob(chunks, {
+        type: recorder.mimeType || "video/webm",
+      });
+      const url = URL.createObjectURL(blob);
+      const name =
+        String(p.name || "meme")
+          .replace(/[\\/:*?"<>|]/g, "-")
+          .trim() || "meme";
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${name}.webm`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setJob({
+        status: "complete",
+        progress: 100,
+        message: "Browser-rendered WebM downloaded",
+      });
+    } catch (e) {
+      setJob(null);
+      setError(e instanceof Error ? e.message : "Browser export failed.");
+    } finally {
+      soundtrackElement?.pause();
+      if (audioContext) await audioContext.close().catch(() => {});
+    }
+  }
   async function save() {
     setSaving(true);
     setSaved(false);
@@ -438,20 +660,85 @@ export default function MemeEditor({
   }
   return (
     <div className="meme-app">
-      <AppHeader name={p.name} mode="meme" onName={(name) => onChange({name})}
-        onMode={(mode) => { setPlaying(false); onChange({mode}); }} onOpen={() => setProjectsOpen(true)}
+      <AppHeader
+        name={p.name}
+        mode="meme"
+        onName={(name) => onChange({ name })}
+        onMode={(mode) => {
+          setPlaying(false);
+          onChange({ mode });
+        }}
+        onOpen={() => setProjectsOpen(true)}
         onNew={() => {
           setPlaying(false);
           setJob(null);
           setElapsed(0);
           setError("");
           setSaved(false);
-          onChange({ name: "Untitled meme", mode: "meme", format: "9:16", shots: [], meme: { ...defaultMeme } });
+          onChange({
+            name: "Untitled meme",
+            mode: "meme",
+            format: "9:16",
+            shots: [],
+            meme: { ...defaultMeme },
+          });
         }}
         newLabel="New meme"
-        onSave={save} saving={saving} onExport={render} exportDisabled={browserOnly || !ready || !bg || working}
-        exportLabel={browserOnly ? "Desktop export" : working ? "Rendering…" : saved ? "Download meme" : "Export meme"} />
-      {projectsOpen && <div className="modal-backdrop" onMouseDown={() => setProjectsOpen(false)}><section className="modal project-picker" onMouseDown={(e) => e.stopPropagation()}><h1>Open project</h1><button className="secondary wide" onClick={() => open.current?.click()}>Choose project file</button><div className="project-list">{savedProjects.map(item => <button className="project-row" key={item.filename} onClick={() => {onOpenSaved(item.filename);setProjectsOpen(false)}}>{item.name}</button>)}</div><button className="text-button" onClick={() => setProjectsOpen(false)}>Close</button></section></div>}
+        onSave={save}
+        saving={saving}
+        onExport={render}
+        exportDisabled={!ready || !bg || working}
+        exportLabel={
+          browserOnly
+            ? working
+              ? "Rendering…"
+              : "Export WebM"
+            : working
+              ? "Rendering…"
+              : saved
+                ? "Download meme"
+                : "Export meme"
+        }
+      />
+      {projectsOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => setProjectsOpen(false)}
+        >
+          <section
+            className="modal project-picker"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h1>Open project</h1>
+            <button
+              className="secondary wide"
+              onClick={() => open.current?.click()}
+            >
+              Choose project file
+            </button>
+            <div className="project-list">
+              {savedProjects.map((item) => (
+                <button
+                  className="project-row"
+                  key={item.filename}
+                  onClick={() => {
+                    onOpenSaved(item.filename);
+                    setProjectsOpen(false);
+                  }}
+                >
+                  {item.name}
+                </button>
+              ))}
+            </div>
+            <button
+              className="text-button"
+              onClick={() => setProjectsOpen(false)}
+            >
+              Close
+            </button>
+          </section>
+        </div>
+      )}
       <input
         hidden
         ref={file}
@@ -491,310 +778,328 @@ export default function MemeEditor({
             <details className="meme-control-section" open>
               <summary>Background image</summary>
               <div className="meme-control-body">
-            <p className="muted">A still image fills the entire frame.</p>
-            <button
-              className="secondary wide"
-              onClick={() => file.current?.click()}
-            >
-              <Upload size={15} /> Import image or meme clip
-            </button>
-            <label>
-              Background
-              <select
-                value={m.backgroundId}
-                onChange={(e) => update({ backgroundId: e.target.value })}
-              >
-                <option value="">Choose an image</option>
-                {assets
-                  .filter((a) => a.kind === "image")
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
+                <p className="muted">A still image fills the entire frame.</p>
+                <button
+                  className="secondary wide"
+                  onClick={() => file.current?.click()}
+                >
+                  <Upload size={15} /> Import image or meme clip
+                </button>
+                <label>
+                  Background
+                  <select
+                    value={m.backgroundId}
+                    onChange={(e) => update({ backgroundId: e.target.value })}
+                  >
+                    <option value="">Choose an image</option>
+                    {assets
+                      .filter((a) => a.kind === "image")
+                      .map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
               </div>
             </details>
             <details className="meme-control-section">
               <summary>Meme video overlay</summary>
               <div className="meme-control-body">
-            <label>
-              Original clip
-              <select
-                value={m.overlayId}
-                onChange={(e) => {
-                  const a = assets.find((a) => a.id === e.target.value);
-                  if (a) selectOverlay(a);
-                  else update({ overlayId: "", cutoutId: "" });
-                }}
-              >
-                <option value="">Choose a video</option>
-                {assets
-                  .filter((a) => a.kind === "video" && !a.cutout)
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label>
-              Overlay type
-              <select
-                value={m.overlayMode}
-                onChange={(e) =>
-                  update({
-                    overlayMode: e.target.value as "cutout" | "original",
-                  })
-                }
-              >
-                <option value="cutout">Transparent cutout</option>
-                <option value="original">Original clip · no cutout</option>
-              </select>
-            </label>
-            <div className="two-cols">
-              <label>
-                Trim start (s)
-                <input
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={m.in}
-                  onChange={(e) =>
-                    update({ in: +e.target.value, cutoutId: "" })
-                  }
-                />
-              </label>
-              <label>
-                Trim end (s)
-                <input
-                  type="number"
-                  min="0.2"
-                  step="0.1"
-                  max={
-                    m.overlayMode === "cutout"
-                      ? Math.min(
-                          MEME_MAX_TRIM_SECONDS,
-                          source?.duration || MEME_MAX_TRIM_SECONDS,
-                        )
-                      : source?.duration
-                  }
-                  value={m.out}
-                  onChange={(e) =>
-                    update({ out: +e.target.value, cutoutId: "" })
-                  }
-                />
-              </label>
-            </div>
-            {m.overlayMode === "cutout" ? (
-              <>
                 <label>
-                  Removal method
+                  Original clip
                   <select
-                    value={m.method}
+                    value={m.overlayId}
+                    onChange={(e) => {
+                      const a = assets.find((a) => a.id === e.target.value);
+                      if (a) selectOverlay(a);
+                      else update({ overlayId: "", cutoutId: "" });
+                    }}
+                  >
+                    <option value="">Choose a video</option>
+                    {assets
+                      .filter((a) => a.kind === "video" && !a.cutout)
+                      .map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  Overlay type
+                  <select
+                    value={m.overlayMode}
                     onChange={(e) =>
                       update({
-                        method: e.target.value as "human" | "ai" | "green",
-                        cutoutId: "",
+                        overlayMode: e.target.value as "cutout" | "original",
                       })
                     }
                   >
-                    <option value="human">
-                      Human cutout · better for people
-                    </option>
-                    <option value="ai">Fast cutout · lightweight</option>
-                    <option value="green">Green screen</option>
+                    <option value="cutout">Transparent cutout</option>
+                    <option value="original">Original clip · no cutout</option>
                   </select>
                 </label>
-                <button
-                  className="primary wide"
-                  disabled={!source || !exportTrimReady}
-                  onClick={requestCutout}
-                >
-                  <Scissors size={15} />
-                  {cutoutReady
-                    ? "Remove background again"
-                    : "Remove background"}
-                </button>
-                {trimReady && !exportTrimReady && (
-                  <p className="warning">
-                    This trim is {(m.out - m.in).toFixed(1)}s. Shorten it to{" "}
-                    {MEME_MAX_TRIM_SECONDS} seconds or less before removing the
-                    background.
-                  </p>
-                )}
-                {cutoutReady && (
-                  <p className="success">✓ Transparent cutout ready</p>
-                )}
-              </>
-            ) : (
-              <>
-                <p className="success">
-                  ✓ Original video will be composited as-is. No background
-                  removal is needed.
-                </p>
-                {trimReady && !exportTrimReady && (
-                  <p className="warning">
-                    Preview is available. Trim this clip to{" "}
-                    {MEME_MAX_TRIM_SECONDS} seconds or less to export.
-                  </p>
-                )}
-              </>
-            )}
-            {canPlay && (
-              <>
-                {(
-                  [
-                    { key: "size", label: "Overlay size", min: 10, max: 150 },
-                    {
-                      key: "x",
-                      label: "Horizontal position",
-                      min: 0,
-                      max: 100,
-                    },
-                    { key: "y", label: "Vertical position", min: 0, max: 100 },
-                  ] as const
-                ).map((c) => (
-                  <label className="range-label" key={c.key}>
-                    {c.label}
-                    <span>{m[c.key]}%</span>
+                <div className="two-cols">
+                  <label>
+                    Trim start (s)
                     <input
-                      aria-label={c.label}
-                      type="range"
-                      min={c.min}
-                      max={c.max}
-                      value={m[c.key]}
-                      onChange={(e) => update({ [c.key]: +e.target.value })}
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={m.in}
+                      onChange={(e) =>
+                        update({ in: +e.target.value, cutoutId: "" })
+                      }
                     />
                   </label>
-                ))}
-              </>
-            )}
+                  <label>
+                    Trim end (s)
+                    <input
+                      type="number"
+                      min="0.2"
+                      step="0.1"
+                      max={
+                        m.overlayMode === "cutout"
+                          ? Math.min(
+                              MEME_MAX_TRIM_SECONDS,
+                              source?.duration || MEME_MAX_TRIM_SECONDS,
+                            )
+                          : source?.duration
+                      }
+                      value={m.out}
+                      onChange={(e) =>
+                        update({ out: +e.target.value, cutoutId: "" })
+                      }
+                    />
+                  </label>
+                </div>
+                {m.overlayMode === "cutout" ? (
+                  <>
+                    <label>
+                      Removal method
+                      <select
+                        value={m.method}
+                        onChange={(e) =>
+                          update({
+                            method: e.target.value as "human" | "ai" | "green",
+                            cutoutId: "",
+                          })
+                        }
+                      >
+                        <option value="human">
+                          Human cutout · better for people
+                        </option>
+                        <option value="ai">Fast cutout · lightweight</option>
+                        <option value="green">Green screen</option>
+                      </select>
+                    </label>
+                    <button
+                      className="primary wide"
+                      disabled={!source || !exportTrimReady}
+                      onClick={requestCutout}
+                    >
+                      <Scissors size={15} />
+                      {cutoutReady
+                        ? "Remove background again"
+                        : "Remove background"}
+                    </button>
+                    {trimReady && !exportTrimReady && (
+                      <p className="warning">
+                        This trim is {(m.out - m.in).toFixed(1)}s. Shorten it to{" "}
+                        {MEME_MAX_TRIM_SECONDS} seconds or less before removing
+                        the background.
+                      </p>
+                    )}
+                    {cutoutReady && (
+                      <p className="success">✓ Transparent cutout ready</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="success">
+                      ✓ Original video will be composited as-is. No background
+                      removal is needed.
+                    </p>
+                    {trimReady && !exportTrimReady && (
+                      <p className="warning">
+                        Preview is available. Trim this clip to{" "}
+                        {MEME_MAX_TRIM_SECONDS} seconds or less to export.
+                      </p>
+                    )}
+                  </>
+                )}
+                {canPlay && (
+                  <>
+                    {(
+                      [
+                        {
+                          key: "size",
+                          label: "Overlay size",
+                          min: 10,
+                          max: 150,
+                        },
+                        {
+                          key: "x",
+                          label: "Horizontal position",
+                          min: 0,
+                          max: 100,
+                        },
+                        {
+                          key: "y",
+                          label: "Vertical position",
+                          min: 0,
+                          max: 100,
+                        },
+                      ] as const
+                    ).map((c) => (
+                      <label className="range-label" key={c.key}>
+                        {c.label}
+                        <span>{m[c.key]}%</span>
+                        <input
+                          aria-label={c.label}
+                          type="range"
+                          min={c.min}
+                          max={c.max}
+                          value={m[c.key]}
+                          onChange={(e) => update({ [c.key]: +e.target.value })}
+                        />
+                      </label>
+                    ))}
+                  </>
+                )}
               </div>
             </details>
             <details className="meme-control-section">
               <summary>Layout</summary>
               <div className="meme-control-body">
-            <label>
-              Meme version
-              <select
-                value={m.layout}
-                onChange={(e) =>
-                  update({ layout: e.target.value as "v1" | "v2" })
-                }
-              >
-                <option value="v1">V1 · Free cutout</option>
-                <option value="v2">V2 · Rectangle mask</option>
-              </select>
-            </label>
-            {m.layout === "v2" && (
-              <>
-                {(
-                  [
-                    { key: "boxX", label: "Box left", min: 0, max: 90 },
-                    { key: "boxY", label: "Box top", min: 0, max: 90 },
-                    { key: "boxWidth", label: "Box width", min: 10, max: 100 },
-                    {
-                      key: "boxHeight",
-                      label: "Box height",
-                      min: 10,
-                      max: 100,
-                    },
-                  ] as const
-                ).map((c) => (
-                  <label className="range-label" key={c.key}>
-                    {c.label}
-                    <span>{m[c.key]}%</span>
-                    <input
-                      aria-label={c.label}
-                      type="range"
-                      min={c.min}
-                      max={c.max}
-                      value={m[c.key]}
-                      onChange={(e) => update({ [c.key]: +e.target.value })}
-                    />
-                  </label>
-                ))}
-              </>
-            )}
+                <label>
+                  Meme version
+                  <select
+                    value={m.layout}
+                    onChange={(e) =>
+                      update({ layout: e.target.value as "v1" | "v2" })
+                    }
+                  >
+                    <option value="v1">V1 · Free cutout</option>
+                    <option value="v2">V2 · Rectangle mask</option>
+                  </select>
+                </label>
+                {m.layout === "v2" && (
+                  <>
+                    {(
+                      [
+                        { key: "boxX", label: "Box left", min: 0, max: 90 },
+                        { key: "boxY", label: "Box top", min: 0, max: 90 },
+                        {
+                          key: "boxWidth",
+                          label: "Box width",
+                          min: 10,
+                          max: 100,
+                        },
+                        {
+                          key: "boxHeight",
+                          label: "Box height",
+                          min: 10,
+                          max: 100,
+                        },
+                      ] as const
+                    ).map((c) => (
+                      <label className="range-label" key={c.key}>
+                        {c.label}
+                        <span>{m[c.key]}%</span>
+                        <input
+                          aria-label={c.label}
+                          type="range"
+                          min={c.min}
+                          max={c.max}
+                          value={m[c.key]}
+                          onChange={(e) => update({ [c.key]: +e.target.value })}
+                        />
+                      </label>
+                    ))}
+                  </>
+                )}
               </div>
             </details>
             <details className="meme-control-section">
               <summary>Audio mix</summary>
               <div className="meme-control-body">
-            <label className="toggle-label">
-              Keep meme clip audio
-              <input
-                type="checkbox"
-                checked={m.keepAudio}
-                onChange={(e) => update({ keepAudio: e.target.checked })}
-              />
-            </label>
-            <label className="range-label">
-              Meme audio volume<span>{Math.round(m.sourceVolume * 100)}%</span>
-              <input
-                aria-label="Meme audio volume"
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={m.sourceVolume}
-                onChange={(e) => update({ sourceVolume: +e.target.value })}
-              />
-            </label>
-            <label>
-              Additional audio
-              <select
-                value={m.soundtrackId}
-                onChange={(e) => update({ soundtrackId: e.target.value })}
-              >
-                <option value="">None</option>
-                {assets
-                  .filter((a) => a.kind === "audio")
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <button
-              className="secondary wide"
-              onClick={() => file.current?.click()}
-            >
-              Import audio
-            </button>
-            <label className="range-label">
-              Additional audio volume
-              <span>{Math.round(m.soundtrackVolume * 100)}%</span>
-              <input
-                aria-label="Additional audio volume"
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={m.soundtrackVolume}
-                onChange={(e) => update({ soundtrackVolume: +e.target.value })}
-              />
-            </label>
-            {(["fadeIn", "fadeOut"] as const).map((key) => (
-              <label className="range-label" key={key}>
-                {key === "fadeIn" ? "Audio fade in" : "Audio fade out"}
-                <span>{m[key]}s</span>
-                <input
-                  aria-label={
-                    key === "fadeIn" ? "Audio fade in" : "Audio fade out"
-                  }
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                  value={m[key]}
-                  onChange={(e) => update({ [key]: +e.target.value })}
-                />
-              </label>
-            ))}
+                <label className="toggle-label">
+                  Keep meme clip audio
+                  <input
+                    type="checkbox"
+                    checked={m.keepAudio}
+                    onChange={(e) => update({ keepAudio: e.target.checked })}
+                  />
+                </label>
+                <label className="range-label">
+                  Meme audio volume
+                  <span>{Math.round(m.sourceVolume * 100)}%</span>
+                  <input
+                    aria-label="Meme audio volume"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={m.sourceVolume}
+                    onChange={(e) => update({ sourceVolume: +e.target.value })}
+                  />
+                </label>
+                <label>
+                  Additional audio
+                  <select
+                    value={m.soundtrackId}
+                    onChange={(e) => update({ soundtrackId: e.target.value })}
+                  >
+                    <option value="">None</option>
+                    {assets
+                      .filter((a) => a.kind === "audio")
+                      .map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <button
+                  className="secondary wide"
+                  onClick={() => file.current?.click()}
+                >
+                  Import audio
+                </button>
+                <label className="range-label">
+                  Additional audio volume
+                  <span>{Math.round(m.soundtrackVolume * 100)}%</span>
+                  <input
+                    aria-label="Additional audio volume"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={m.soundtrackVolume}
+                    onChange={(e) =>
+                      update({ soundtrackVolume: +e.target.value })
+                    }
+                  />
+                </label>
+                {(["fadeIn", "fadeOut"] as const).map((key) => (
+                  <label className="range-label" key={key}>
+                    {key === "fadeIn" ? "Audio fade in" : "Audio fade out"}
+                    <span>{m[key]}s</span>
+                    <input
+                      aria-label={
+                        key === "fadeIn" ? "Audio fade in" : "Audio fade out"
+                      }
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={m[key]}
+                      onChange={(e) => update({ [key]: +e.target.value })}
+                    />
+                  </label>
+                ))}
               </div>
             </details>
           </fieldset>
@@ -981,134 +1286,161 @@ export default function MemeEditor({
           <details className="meme-control-section meme-template-controls" open>
             <summary>Templates</summary>
             <div className="meme-control-body">
-            <label>
-              Meme template
-              <select value="" onChange={(e) => { const item = templates.find((x) => x.file === e.target.value); if (item) onChange({ format:item.format || p.format, meme:{...defaultMeme,...item.meme} }); }}>
-                <option value="">Choose a saved template</option>
-                {templates.map((item) => <option value={item.file} key={item.file}>{item.name}</option>)}
-              </select>
-            </label>
-            <div className="template-save">
-              <input value={templateName} placeholder="New template name" onChange={(e) => setTemplateName(e.target.value)} />
-              <button className="secondary wide" onClick={saveTemplate}>Save template</button>
-            </div>
+              <label>
+                Meme template
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const item = templates.find(
+                      (x) => x.file === e.target.value,
+                    );
+                    if (item)
+                      onChange({
+                        format: item.format || p.format,
+                        meme: { ...defaultMeme, ...item.meme },
+                      });
+                  }}
+                >
+                  <option value="">Choose a saved template</option>
+                  {templates.map((item) => (
+                    <option value={item.file} key={item.file}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="template-save">
+                <input
+                  value={templateName}
+                  placeholder="New template name"
+                  onChange={(e) => setTemplateName(e.target.value)}
+                />
+                <button className="secondary wide" onClick={saveTemplate}>
+                  Save template
+                </button>
+              </div>
             </div>
           </details>
           <fieldset disabled={working}>
             <details className="meme-control-section" open>
               <summary>POV text</summary>
               <div className="meme-control-body">
-            <label>
-              POV text
-              <textarea
-                rows={4}
-                maxLength={300}
-                value={m.text}
-                onChange={(e) => update({ text: e.target.value })}
-              />
-            </label>
-            <FontPicker
-              label="Font"
-              fonts={["Arial", "Helvetica", "Georgia", "Verdana"]}
-              value={m.textFont}
-              onChange={(textFont) => update({ textFont })}
-            />
-            <TextSizeColor
-              size={m.textSize}
-              color={m.textColor}
-              min={30}
-              max={120}
-              sizeLabel="Text size"
-              onSize={(textSize) => update({ textSize })}
-              onColor={(textColor) => update({ textColor })}
-            />
-            <label className="range-label">
-              Text position<span>{m.textPosition}%</span>
-              <input
-                aria-label="POV text position"
-                type="range"
-                min="10"
-                max="85"
-                value={m.textPosition}
-                onChange={(e) => update({ textPosition: +e.target.value })}
-              />
-            </label>
-            <div className="divider" />
-            <label className="range-label">
-              Text outline<span>{m.textOutline ?? 4}px</span>
-              <input
-                aria-label="POV text outline"
-                type="range"
-                min="0"
-                max="10"
-                value={m.textOutline ?? 4}
-                onChange={(e) => update({ textOutline: +e.target.value })}
-              />
-            </label>
+                <label>
+                  POV text
+                  <textarea
+                    rows={4}
+                    maxLength={300}
+                    value={m.text}
+                    onChange={(e) => update({ text: e.target.value })}
+                  />
+                </label>
+                <FontPicker
+                  label="Font"
+                  fonts={["Arial", "Helvetica", "Georgia", "Verdana"]}
+                  value={m.textFont}
+                  onChange={(textFont) => update({ textFont })}
+                />
+                <TextSizeColor
+                  size={m.textSize}
+                  color={m.textColor}
+                  min={30}
+                  max={120}
+                  sizeLabel="Text size"
+                  onSize={(textSize) => update({ textSize })}
+                  onColor={(textColor) => update({ textColor })}
+                />
+                <label className="range-label">
+                  Text position<span>{m.textPosition}%</span>
+                  <input
+                    aria-label="POV text position"
+                    type="range"
+                    min="10"
+                    max="85"
+                    value={m.textPosition}
+                    onChange={(e) => update({ textPosition: +e.target.value })}
+                  />
+                </label>
+                <div className="divider" />
+                <label className="range-label">
+                  Text outline<span>{m.textOutline ?? 4}px</span>
+                  <input
+                    aria-label="POV text outline"
+                    type="range"
+                    min="0"
+                    max="10"
+                    value={m.textOutline ?? 4}
+                    onChange={(e) => update({ textOutline: +e.target.value })}
+                  />
+                </label>
               </div>
             </details>
             <details className="meme-control-section">
               <summary>Free text layer</summary>
               <div className="meme-control-body">
-            <p className="hint">
-              Independent of POV. Drag its handle in the preview or use the
-              position sliders.
-            </p>
-            <label>
-              Free text
-              <textarea
-                maxLength={300}
-                rows={3}
-                value={m.freeText}
-                onChange={(e) => update({ freeText: e.target.value })}
-              />
-            </label>
-            <FontPicker
-              label="Free text font"
-              fonts={["Arial", "Helvetica", "Georgia", "Verdana"]}
-              value={m.freeFont}
-              onChange={(freeFont) => update({ freeFont })}
-            />
-            <TextSizeColor
-              size={m.freeSize}
-              color={m.freeColor}
-              min={24}
-              max={120}
-              sizeLabel="Free text size"
-              colorLabel="Free text color"
-              onSize={(freeSize) => update({ freeSize })}
-              onColor={(freeColor) => update({ freeColor })}
-            />
-            {(
-              [
-                {
-                  key: "freeOutline",
-                  label: "Free text outline",
-                  min: 0,
-                  max: 10,
-                },
-                {
-                  key: "freeX",
-                  label: "Free text horizontal",
-                  min: 0,
-                  max: 100,
-                },
-                { key: "freeY", label: "Free text vertical", min: 0, max: 100 },
-              ] as const
-            ).map((c) => (
-              <label className="range-label" key={c.key}>
-                {c.label}
-                <span>{m[c.key]}</span>
-                <input
-                  aria-label={c.label}
-                  type="range"
-                  min={c.min}
-                  max={c.max}
-                  value={m[c.key]}
-                onChange={(e) => update({ [c.key]: +e.target.value })}
-              />
-            </label>
-            ))}
+                <p className="hint">
+                  Independent of POV. Drag its handle in the preview or use the
+                  position sliders.
+                </p>
+                <label>
+                  Free text
+                  <textarea
+                    maxLength={300}
+                    rows={3}
+                    value={m.freeText}
+                    onChange={(e) => update({ freeText: e.target.value })}
+                  />
+                </label>
+                <FontPicker
+                  label="Free text font"
+                  fonts={["Arial", "Helvetica", "Georgia", "Verdana"]}
+                  value={m.freeFont}
+                  onChange={(freeFont) => update({ freeFont })}
+                />
+                <TextSizeColor
+                  size={m.freeSize}
+                  color={m.freeColor}
+                  min={24}
+                  max={120}
+                  sizeLabel="Free text size"
+                  colorLabel="Free text color"
+                  onSize={(freeSize) => update({ freeSize })}
+                  onColor={(freeColor) => update({ freeColor })}
+                />
+                {(
+                  [
+                    {
+                      key: "freeOutline",
+                      label: "Free text outline",
+                      min: 0,
+                      max: 10,
+                    },
+                    {
+                      key: "freeX",
+                      label: "Free text horizontal",
+                      min: 0,
+                      max: 100,
+                    },
+                    {
+                      key: "freeY",
+                      label: "Free text vertical",
+                      min: 0,
+                      max: 100,
+                    },
+                  ] as const
+                ).map((c) => (
+                  <label className="range-label" key={c.key}>
+                    {c.label}
+                    <span>{m[c.key]}</span>
+                    <input
+                      aria-label={c.label}
+                      type="range"
+                      min={c.min}
+                      max={c.max}
+                      value={m[c.key]}
+                      onChange={(e) => update({ [c.key]: +e.target.value })}
+                    />
+                  </label>
+                ))}
               </div>
             </details>
           </fieldset>
