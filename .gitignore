@@ -1,0 +1,17 @@
+node_modules/
+dist/
+data/
+.DS_Store
+
+.env
+.env.*
+!.env.example
+
+*.tsbuildinfo
+inbox/
+saved/
+
+__pycache__/
+*.py[cod]
+
+.venv*/
