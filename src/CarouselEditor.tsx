@@ -10,6 +10,7 @@ import {
 import AppHeader from "./AppHeader";
 import ColorControl from "./ColorControl";
 import { FontPicker, TextSizeColor } from "./TextStyleControls";
+import { browserOnly, listBrowserTemplates, saveBrowserTemplate } from "./browserStorage";
 
 type TextStyle = {
   font: string;
@@ -548,7 +549,13 @@ export default function CarouselEditor({
     update({ font, slides });
   };
   const refreshTemplates = () =>
-    fetch("/api/carousel/templates")
+    browserOnly
+      ? (() => {
+          const items = listBrowserTemplates("carousel");
+          setTemplates(items);
+          setTemplateFile((current) => current && items.some((item: any) => item.file === current) ? current : "");
+        })()
+      : fetch("/api/carousel/templates")
       .then((r) => r.json())
       .then((x) => {
         const items = x.items || [];
@@ -577,6 +584,13 @@ export default function CarouselEditor({
     }
     const carousel = selectedTemplate?.name === name ? c : duplicateCarousel(c);
     try {
+      if (browserOnly) {
+        saveBrowserTemplate("carousel", name, carousel);
+        setTemplateName("");
+        setTemplateSaveMessage(`Saved ${name} in this browser`);
+        refreshTemplates();
+        return;
+      }
       const r = await fetch("/api/carousel/templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

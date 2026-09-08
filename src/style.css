@@ -184,6 +184,12 @@ header {
   gap: 8px;
   flex: 0 0 auto;
 }
+.header-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
 .mode-switcher {
   display: flex;
   height: 44px;

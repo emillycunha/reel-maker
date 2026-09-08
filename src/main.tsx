@@ -35,6 +35,12 @@ import {
   neutralColor,
   type Grade,
 } from "../shared/editing.mjs";
+import {
+  browserOnly,
+  listBrowserProjects,
+  openBrowserProject,
+  saveBrowserProject,
+} from "./browserStorage";
 type Asset = {
   id: string;
   name: string;
@@ -203,6 +209,10 @@ function App() {
     );
   };
   useEffect(() => {
+    if (browserOnly) {
+      setNotice("Online demo: projects stay in this browser. Video rendering requires the desktop edition.");
+      return;
+    }
     fetch("/api/assets")
       .then((r) => r.json())
       .then(setAssets)
@@ -211,7 +221,14 @@ function App() {
       );
   }, []);
   const refreshSavedProjects = () =>
-    fetch("/api/projects")
+    browserOnly
+      ? setSavedProjects(listBrowserProjects().map((item) => ({
+          filename: item.filename,
+          name: item.name,
+          updatedAt: item.updatedAt,
+          size: item.size,
+        })))
+      : fetch("/api/projects")
       .then((r) => r.json())
       .then((items) => setSavedProjects(Array.isArray(items) ? items : []))
       .catch(() => {});
@@ -254,6 +271,44 @@ function App() {
     const imported: Asset[] = [];
     setBusy("Importing media…");
     try {
+      if (browserOnly) {
+        for (const file of Array.from(files)) {
+          const url = URL.createObjectURL(file);
+          const kind: Asset["kind"] = file.type.startsWith("image/")
+            ? "image"
+            : file.type.startsWith("audio/")
+              ? "audio"
+              : "video";
+          const a: Asset = {
+            id: uid(),
+            name: file.name,
+            kind,
+            duration: 0,
+            url,
+            thumbnail: kind === "image" ? url : undefined,
+          };
+          if (kind === "image") {
+            const image = new Image();
+            image.src = url;
+            await image.decode();
+            a.width = image.naturalWidth;
+            a.height = image.naturalHeight;
+          } else {
+            const media = document.createElement(kind);
+            media.preload = "metadata";
+            media.src = url;
+            await new Promise<void>((resolve, reject) => {
+              media.onloadedmetadata = () => resolve();
+              media.onerror = () => reject(Error(`Could not read ${file.name}`));
+            });
+            a.duration = Number.isFinite(media.duration) ? media.duration : 0;
+          }
+          imported.push(a);
+          setAssets((old) => [...old, a]);
+        }
+        setNotice("Media stays in this tab only. Project settings and templates are saved in this browser.");
+        return imported;
+      }
       for (const file of Array.from(files)) {
         const r = await fetch(
           "/api/import?name=" + encodeURIComponent(file.name),
@@ -315,6 +370,12 @@ function App() {
   }
   async function saveProject(project = p) {
     try {
+      if (browserOnly) {
+        const result = saveBrowserProject(project);
+        refreshSavedProjects();
+        setNotice(`Saved ${result.name} in this browser`);
+        return true;
+      }
       const r = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -332,9 +393,15 @@ function App() {
   }
   async function openSavedProject(filename: string) {
     try {
-      const r = await fetch(`/api/projects/${encodeURIComponent(filename)}`),
+      let q: any;
+      if (browserOnly) {
+        q = openBrowserProject(filename);
+        if (!q) throw Error("Could not open the browser-saved project.");
+      } else {
+        const r = await fetch(`/api/projects/${encodeURIComponent(filename)}`);
         q = await r.json();
-      if (!r.ok) throw Error(q.error || "Could not open saved project.");
+        if (!r.ok) throw Error(q.error || "Could not open saved project.");
+      }
       if (
         q.version !== 1 ||
         !Array.isArray(q.shots) ||
@@ -345,7 +412,7 @@ function App() {
       setP(q);
       setSelected(0);
       setPlaying(false);
-      setNotice(`Opened saved/${filename}`);
+      setNotice(browserOnly ? `Opened ${filename} from this browser` : `Opened saved/${filename}`);
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -554,7 +621,7 @@ function App() {
       <AppHeader name={p.name} mode="reel" onName={(name) => update({name})}
         onMode={(mode) => { setPlaying(false); update({ mode, meme: p.meme || {...defaultMeme}, carousel: p.carousel || {...defaultCarousel} }); }}
         onOpen={() => setModal("projects")} onSave={() => saveProject()}
-        onExport={() => setModal("export")} exportLabel="Export reel" />
+        onExport={() => setModal("export")} exportLabel={browserOnly ? "Desktop export" : "Export reel"} exportDisabled={browserOnly} />
       <main>
         <aside className="library">
           <div className="section-title">

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import AppHeader from "./AppHeader";
 import { FontPicker, TextSizeColor } from "./TextStyleControls";
+import { browserOnly, listBrowserTemplates, saveBrowserTemplate } from "./browserStorage";
 export type MemeSettings = MemeOptions & {
   backgroundId: string;
   overlayId: string;
@@ -147,10 +148,18 @@ export default function MemeEditor({
       : Math.max(0, m.out - m.in),
     working = job?.status === "rendering";
   const refreshTemplates = () =>
-    fetch("/api/meme/templates").then((r) => r.json()).then((x) => setTemplates(x.items || [])).catch(() => {});
+    browserOnly
+      ? setTemplates(listBrowserTemplates("meme"))
+      : fetch("/api/meme/templates").then((r) => r.json()).then((x) => setTemplates(x.items || [])).catch(() => {});
   useEffect(() => { refreshTemplates(); }, []);
   async function saveTemplate() {
     const name = templateName.trim() || p.name || "Meme template";
+    if (browserOnly) {
+      saveBrowserTemplate("meme", name, m);
+      setTemplateName("");
+      refreshTemplates();
+      return;
+    }
     const r = await fetch("/api/meme/templates", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ name, format:p.format, meme:m }) });
     if (r.ok) { setTemplateName(""); refreshTemplates(); }
   }
@@ -440,8 +449,8 @@ export default function MemeEditor({
           onChange({ name: "Untitled meme", mode: "meme", format: "9:16", shots: [], meme: { ...defaultMeme } });
         }}
         newLabel="New meme"
-        onSave={save} saving={saving} onExport={render} exportDisabled={!ready || !bg || working}
-        exportLabel={working ? "Rendering…" : saved ? "Download meme" : "Export meme"} />
+        onSave={save} saving={saving} onExport={render} exportDisabled={browserOnly || !ready || !bg || working}
+        exportLabel={browserOnly ? "Desktop export" : working ? "Rendering…" : saved ? "Download meme" : "Export meme"} />
       {projectsOpen && <div className="modal-backdrop" onMouseDown={() => setProjectsOpen(false)}><section className="modal project-picker" onMouseDown={(e) => e.stopPropagation()}><h1>Open project</h1><button className="secondary wide" onClick={() => open.current?.click()}>Choose project file</button><div className="project-list">{savedProjects.map(item => <button className="project-row" key={item.filename} onClick={() => {onOpenSaved(item.filename);setProjectsOpen(false)}}>{item.name}</button>)}</div><button className="text-button" onClick={() => setProjectsOpen(false)}>Close</button></section></div>}
       <input
         hidden

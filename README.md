@@ -21,6 +21,24 @@ Reel Maker brings three creation workflows into one consistent desktop-style wor
 
 Everything stays local by default: source media, saved projects, templates, rendering, and exports.
 
+## Online demo
+
+The repository includes `wrangler.jsonc` for a Cloudflare Worker Static Assets deployment. The hosted build uses browser storage only—there is no R2 bucket, database, account system, or server-side media upload.
+
+- Carousel creation, templates, SVG/PNG export, and project settings work in the browser.
+- Browser-saved projects and templates stay on that device and browser profile.
+- Reel and Meme media processing and MP4 export require the desktop edition because those workflows use native FFmpeg.
+- Visitors can open or fork the MIT-licensed source from the editor header.
+
+In Cloudflare Workers Builds, connect this GitHub repository and use:
+
+```text
+Build command: npm run build:cloudflare
+Deploy command: npm run deploy
+```
+
+No R2 binding or application secrets are required.
+
 ## Requirements
 
 - Node.js 20.19+ or Node.js 22+

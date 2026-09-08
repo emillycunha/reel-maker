@@ -1,4 +1,5 @@
-import { Download, Film, FolderOpen, Images, Plus, Sparkles } from "lucide-react";
+import { Download, ExternalLink, Film, FolderOpen, Images, Plus, Sparkles } from "lucide-react";
+import { browserOnly } from "./browserStorage";
 
 export type EditorMode = "reel" | "meme" | "carousel";
 
@@ -27,7 +28,7 @@ export default function AppHeader(props: Props) {
       </button>
       <div className="project-name">
         <input aria-label="Project name" value={props.name} onChange={(e) => props.onName(e.target.value)} />
-        <span><span className="dot" /> Saved in project/saved</span>
+        <span><span className="dot" /> {browserOnly ? "Saved in this browser" : "Saved in project/saved"}</span>
       </div>
       <div className="header-actions">
         <div className="mode-switcher" aria-label="Editor mode">
@@ -39,6 +40,7 @@ export default function AppHeader(props: Props) {
         {props.onNew && <button className="secondary" onClick={props.onNew}><Plus size={15} /> {props.newLabel || "New project"}</button>}
         <button className="secondary" disabled={props.saving} onClick={props.onSave}><Download size={15} /> {props.saving ? "Saving…" : "Save project"}</button>
         <button className="primary" disabled={props.exportDisabled} onClick={props.onExport}>{props.exportLabel} <Download size={15} /></button>
+        {browserOnly && <a className="secondary header-source" href="https://github.com/emillycunha/reel-maker" target="_blank" rel="noreferrer">Source <ExternalLink size={14} /></a>}
       </div>
     </header>
   );
