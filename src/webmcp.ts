@@ -64,6 +64,15 @@ const result = (message: string, project: WebMcpProject) => ({
 
 const clone = <T>(value: T): T => structuredClone(value);
 
+const canvasFormat = (
+  mode: "reel" | "meme" | "carousel",
+  current: string,
+  carouselFormat?: "1:1" | "4:5" | "3:4",
+) => {
+  if (mode === "carousel") return carouselFormat || "4:5";
+  return ["9:16", "1:1", "16:9"].includes(current) ? current : "9:16";
+};
+
 export function registerWebMcpTools(api: WebMcpApi) {
   const modelContext = (document as Document & { modelContext?: ModelContext })
     .modelContext;
@@ -102,6 +111,7 @@ export function registerWebMcpTools(api: WebMcpApi) {
       },
       ["mode"],
     ),
+    annotations: { destructiveHint: true },
     execute: ({ mode, name }) => {
       const base = clone(api.defaults.reel);
       const project: WebMcpProject = {
@@ -137,7 +147,11 @@ export function registerWebMcpTools(api: WebMcpApi) {
         meme: current.meme || clone(api.defaults.meme),
         carousel: current.carousel || clone(api.defaults.carousel),
       };
-      if (mode === "carousel") project.format = project.carousel!.format;
+      project.format = canvasFormat(
+        mode,
+        current.format,
+        project.carousel!.format,
+      );
       api.setProject(project);
       return result(`Switched to ${mode}`, project);
     },
@@ -175,7 +189,7 @@ export function registerWebMcpTools(api: WebMcpApi) {
       const project = {
         ...current,
         mode: "meme" as const,
-        format: input.format || current.format || "9:16",
+        format: input.format || canvasFormat("meme", current.format),
         meme,
       };
       api.setProject(project);
@@ -209,6 +223,7 @@ export function registerWebMcpTools(api: WebMcpApi) {
       },
       ["slides"],
     ),
+    annotations: { destructiveHint: true },
     execute: ({ name, format, slides }) => {
       const current = api.getProject();
       const carousel = clone(current.carousel || api.defaults.carousel)!;
