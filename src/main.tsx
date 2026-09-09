@@ -44,6 +44,7 @@ import {
   openBrowserProject,
   saveBrowserProject,
 } from "./browserStorage";
+import { registerWebMcpTools, type WebMcpProject } from "./webmcp";
 type Asset = {
   id: string;
   name: string;
@@ -194,6 +195,8 @@ function App() {
   const [plan, setPlan] = useState("");
   const [job, setJob] = useState<any>(null);
   const [libraryTab, setLibraryTab] = useState("Clips");
+  const projectRef = useRef(p);
+  projectRef.current = p;
   const fileInput = useRef<HTMLInputElement>(null),
     projectInput = useRef<HTMLInputElement>(null),
     video = useRef<HTMLVideoElement>(null),
@@ -407,6 +410,25 @@ function App() {
       return false;
     }
   }
+  useEffect(
+    () =>
+      registerWebMcpTools({
+        getProject: () => projectRef.current as WebMcpProject,
+        setProject: (project) => {
+          setP(project as Project);
+          setSelected(0);
+          setPlaying(false);
+          setNotice("Project updated by your browser agent.");
+        },
+        saveProject: (project) => saveProject(project as Project),
+        defaults: {
+          reel: initial as WebMcpProject,
+          meme: defaultMeme as unknown as Record<string, unknown>,
+          carousel: defaultCarousel as WebMcpProject["carousel"],
+        },
+      }),
+    [],
+  );
   async function openSavedProject(filename: string) {
     try {
       let q: any;
