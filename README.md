@@ -31,6 +31,23 @@ The repository includes `wrangler.jsonc` for a Cloudflare Worker Static Assets d
 - Background removal and native MP4 export require the desktop edition because those workflows use FFmpeg.
 - Visitors can open or fork the MIT-licensed source from the editor header.
 
+## WebMCP
+
+Reel Maker progressively exposes browser-native WebMCP tools when opened in a
+compatible browser. An agent can create projects, switch editors, update meme
+copy and styles, build carousel slides, change carousel themes, inspect the
+current project, and save it locally. The tools call the same client-side state
+used by the visible editor.
+
+WebMCP does not add an AI service or remote MCP server. It does not upload
+media, use Cloudflare storage, or create an API bill. Local file selection and
+downloads remain user-controlled browser actions.
+
+WebMCP is experimental. In current Chrome development builds, enable
+`chrome://flags/#enable-webmcp-testing`, relaunch Chrome, and inspect the page
+with a compatible WebMCP tool inspector. Browsers without WebMCP support use
+Reel Maker normally and do not load a polyfill.
+
 In Cloudflare Workers Builds, connect this GitHub repository and use:
 
 ```text
